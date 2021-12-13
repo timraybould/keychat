@@ -1,9 +1,9 @@
 import {useState} from 'react'
 import './App.css'
 import WalletConnect from '@walletconnect/web3-provider'
-import { ethers, providers } from 'ethers'
+import { ethers } from 'ethers'
 import { SignatureType, SiweMessage, generateNonce } from 'siwe'
-//@ts-ignore
+import {ReactComponent as EthereumLogo} from './images/ethereum_logo.svg';
 
 declare global {
   interface Window {
@@ -12,120 +12,104 @@ declare global {
   }
 }
 
-const enum Providers {
-  METAMASK = 'metamask',
+const enum Connectors {
+  WINDOW = 'window',
   WALLET_CONNECT = 'walletconnect',
 }
 
-const getInfuraUrl = (chainId: string) => {
-  switch (Number.parseInt(chainId)) {
-      case 1:
-          return 'wss://mainnet.infura.io/ws/v3'
-      case 3:
-          return 'wss://ropsten.infura.io/ws/v3'
-      case 4:
-          return 'wss://rinkeby.infura.io/ws/v3'
-      case 5:
-          return 'wss://goerli.infura.io/ws/v3'
-      case 137:
-          return 'wss://polygon-mainnet.infura.io/ws/v3'
-  }
-}
-
 export default function App() {
+  const [awaitingVerification, setAwaitingVerification] = useState(false)
   const [ethAddress, setEthAddress] = useState("")
   const [ensString, setEnsString] = useState("")
 
-  const metamask = window.ethereum
-  let walletconnect: WalletConnect
-
-  // function infuraTest() {
-  //   const options = {
-  //     jsonrpc: "2.0",
-  //     method: "eth_getBalance",
-  //     params: ["0xBf4eD7b27F1d666546E30D74d50d173d20bca754", "latest"],
-  //     id: 1
-  //   }
-  //   fetch("https://mainnet.infura.io/v3/cf20dfc01b0f471192ceb55fdab69316",{
-  //     method:"POST",
-  //     headers: { 'content-type': 'application/json' },
-  //     body: JSON.stringify(options)
-  //   }).then(response => {
-  //     return response.json()
-  //   }).then(data => {
-  //     console.log(data)
-  //   })
-  // }
-
-  async function generateAndSignMessage(provider: ethers.providers.Web3Provider): Promise<SiweMessage> {
-    const [address] = await provider.listAccounts()
-    if (!address) {
-        throw new Error('Address not found.')
+  async function generateSignValidateMessage(provider: ethers.providers.Web3Provider) {
+    try {
+      const [address] = await provider.listAccounts()
+      if (!address) {
+          throw new Error('Address not found.')
+      }
+      const ens = await provider.lookupAddress(address) || ""
+      const nonce = generateNonce()
+      const message = new SiweMessage({
+          domain: document.location.host,
+          address,
+          chainId: `${await provider.getNetwork().then(({ chainId }) => chainId)}`,
+          uri: document.location.origin,
+          version: '1',
+          statement: 'Some text that you will recognize',
+          type: SignatureType.PERSONAL_SIGNATURE,
+          nonce,
+      })
+      const signature = await provider.getSigner().signMessage(message.signMessage())
+      message.signature = signature
+      // need to pass a JsonRpcProvider to validate if https://eips.ethereum.org/EIPS/eip-1271 is needed
+      await message.validate()
+      setEthAddress(address)
+      setEnsString(ens)
+    } catch (error) {
+      console.log(error)
     }
-    const ens = await provider.lookupAddress(address) || ""
-    setEthAddress(address)
-    setEnsString(ens)
-    const nonce = generateNonce()
-    const message = new SiweMessage({
-        domain: document.location.host,
-        address,
-        chainId: `${await provider.getNetwork().then(({ chainId }) => chainId)}`,
-        uri: document.location.origin,
-        version: '1',
-        statement: 'Some text that you will recognize',
-        type: SignatureType.PERSONAL_SIGNATURE,
-        nonce,
-    })
-    const signature = await provider.getSigner().signMessage(message.signMessage())
-    message.signature = signature
-    return message
   }
 
-  async function signIn(connector: Providers) {
-    let provider: ethers.providers.Web3Provider
-    if (connector === 'metamask') {
-        await metamask.request({method: 'eth_requestAccounts'})
-        provider = new ethers.providers.Web3Provider(metamask)
-        const message = await generateAndSignMessage(provider)
-        try {
-          await message.validate()
-        } catch (error) {
-          console.log(error)
-        }
+  async function signIn(connector: Connectors) {
+    setAwaitingVerification(true)
+    if (connector === 'window') {
+        await window.ethereum.request({method: 'eth_requestAccounts'})
+        await generateSignValidateMessage(new ethers.providers.Web3Provider(window.ethereum))
+        setAwaitingVerification(false)
     } else {
-        walletconnect = new WalletConnect({infuraId: 'cf20dfc01b0f471192ceb55fdab69316'})
+      try {
+        const walletconnect = new WalletConnect({infuraId: 'cf20dfc01b0f471192ceb55fdab69316'})
         walletconnect.enable()
-        provider = new ethers.providers.Web3Provider(walletconnect)
-        const message = await generateAndSignMessage(provider)
-        const infuraProvider = new providers.JsonRpcProvider(
-          {
-              allowGzip: true,
-              url: `${getInfuraUrl(message.chainId)}/cf20dfc01b0f471192ceb55fdab69316`,
-              // headers: {
-              //     Accept: '*/*',
-              //     Origin: `https://keychat.pages.dev`,
-              //     'Accept-Encoding': 'gzip, deflate, br',
-              //     'Content-Type': 'application/json',
-              // },
-          },
-          Number.parseInt(message.chainId),
-        );
-        await infuraProvider.ready
-        try {
-          await message.validate(infuraProvider)
-        } catch (error) {
-          console.log(error)
-        }
+        await generateSignValidateMessage(new ethers.providers.Web3Provider(walletconnect))
+        setAwaitingVerification(false)
         walletconnect.disconnect()
+      } catch (error) {
+        console.log(error)
+        setAwaitingVerification(false)
+      }
     }
   };
 
   return (
       <div>
-        <button onClick={() => signIn(Providers.METAMASK)}>Sign in with Metamask</button><br />
-        <button onClick={() => signIn(Providers.WALLET_CONNECT)}>Sign in with WalletConnect</button><br />
-        <p>address: {ethAddress}</p>
-        <p>ens: {ensString}</p>
+        <h1>Keychat</h1>
+        {awaitingVerification
+          ?
+            <h2>Awaiting verification...</h2>
+          :
+            ethAddress === ""
+              ? 
+                window.ethereum
+                  ?
+                    <div>
+                      <h2>Give any Ethereum address a voice</h2>
+                      <button onClick={() => signIn(Connectors.WINDOW)}>
+                        <EthereumLogo />
+                        <span>Sign in with Ethereum</span>
+                      </button>
+                      <a onClick={() => signIn(Connectors.WALLET_CONNECT)}>Use a wallet outside of the browser?</a>
+                    </div>
+                  :
+                    <div>
+                      <h2>Give any Ethereum address a voice</h2>
+                      <button onClick={() => signIn(Connectors.WALLET_CONNECT)}>Sign in with Ethereum</button>
+                    </div>
+              :   
+                <div>
+                  <h2>You control the following keychat IDs</h2>
+                  <div className="keychatIdResults">
+                    <span>{ethAddress}@keychat.xyz</span>
+                    <a>Set or reset the password</a>
+                  </div>
+                  {ensString !== "" &&
+                    <div className="keychatIdResults">
+                      <span>{ensString}@keychat.xyz</span>
+                      <a>Set or reset the password</a>
+                    </div>
+                  }
+                </div>
+        }
       </div>
   )
 }
