@@ -93,7 +93,10 @@ export default function App() {
                   :
                     <div>
                       <h2>Give any Ethereum address a voice</h2>
-                      <button onClick={() => signIn(Connectors.WALLET_CONNECT)}>Sign in with Ethereum</button>
+                      <button onClick={() => signIn(Connectors.WALLET_CONNECT)}>
+                        <EthereumLogo />
+                        <span>Sign in with Ethereum</span>
+                      </button>
                     </div>
               :   
                 <div>
